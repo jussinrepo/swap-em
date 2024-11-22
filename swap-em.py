@@ -14,6 +14,19 @@ NUM_COLORS = 8
 COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'aqua', 'hotpink', 'chocolate'][:NUM_COLORS]
 ANIMATION_SPEED = 10
 
+class Tile:
+    def __init__(self, color, special_type=None):
+        self.color = color
+        self.special_type = special_type
+
+    def __eq__(self, other):
+        if isinstance(other, Tile):
+            return self.color == other.color
+        return False
+
+    def __str__(self):
+        return self.color
+
 class MatchThreeGame:
 
     def __init__(self):
@@ -22,6 +35,9 @@ class MatchThreeGame:
         pygame.display.set_caption('Swap\'em! A Match Three Game')
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 36)
+        
+        # Initialize grid
+        self.grid = None  # Will be populated in reset_game()
 
         # JSON-based high score management
         self.high_score_file = 'swap_em_highscores.json'
@@ -149,6 +165,9 @@ class MatchThreeGame:
         except IOError:
             print("Could not save high scores")
 
+    def create_random_tile(self):
+        return Tile(random.choice(COLORS[:self.current_color_count]))
+
     def create_grid_without_matches(self):
         while True:
             grid = [[self.create_random_tile() for _ in range(GRID_WIDTH)] 
@@ -157,25 +176,50 @@ class MatchThreeGame:
             if not self.check_matches(test_grid):
                 return grid
 
-    def create_random_tile(self):
-        return random.choice(COLORS[:self.current_color_count])
+    def create_special_tile(self, color, special_type='L'):
+        return Tile(color, special_type)
+
+    def handle_special_tile_effects(self, matches):
+        tiles_to_remove = set(matches)
+        
+        # Check for special tiles in matches
+        for y, x in matches:
+            if isinstance(self.grid[y][x], Tile) and self.grid[y][x].special_type == 'L':
+                # Add all tiles in the same row to be removed
+                for col in range(GRID_WIDTH):
+                    tiles_to_remove.add((y, col))
+        
+        return tiles_to_remove
+
+    def handle_match_creation(self, matches):
+        if len(matches) >= 4:
+            # Create a special tile at the top of a random column
+            random_col = random.randint(0, GRID_WIDTH-1)
+            random_color = random.choice(COLORS[:self.current_color_count])
+            special_tile = Tile(random_color, special_type='L')
+            
+            # Insert the special tile at the top
+            for y in range(GRID_HEIGHT-1, 0, -1):
+                self.grid[y][random_col] = self.grid[y-1][random_col]
+            self.grid[0][random_col] = special_tile
 
     def check_matches(self, grid=None):
         if grid is None:
             grid = self.grid
         matches = set()
+        
         # Horizontal matches
         for y in range(GRID_HEIGHT):
             for x in range(GRID_WIDTH-2):
-                if (grid[y][x] and 
-                    grid[y][x] == grid[y][x+1] == grid[y][x+2]):
+                if (grid[y][x] and grid[y][x+1] and grid[y][x+2] and
+                    grid[y][x].color == grid[y][x+1].color == grid[y][x+2].color):
                     matches.update([(y, x), (y, x+1), (y, x+2)])
 
         # Vertical matches
         for x in range(GRID_WIDTH):
             for y in range(GRID_HEIGHT-2):
-                if (grid[y][x] and 
-                    grid[y][x] == grid[y+1][x] == grid[y+2][x]):
+                if (grid[y][x] and grid[y+1][x] and grid[y+2][x] and
+                    grid[y][x].color == grid[y+1][x].color == grid[y+2][x].color):
                     matches.update([(y, x), (y+1, x), (y+2, x)])
 
         return matches
@@ -201,11 +245,19 @@ class MatchThreeGame:
         
         for y in range(GRID_HEIGHT):
             for x in range(GRID_WIDTH):
-                if self.grid[y][x]:
+                tile = self.grid[y][x]
+                if tile:
                     tile_rect = pygame.Rect(x*TILE_SIZE, y*TILE_SIZE + 36, TILE_SIZE, TILE_SIZE)
                     
                     # Draw gradient tile
-                    self.draw_gradient_rect(self.screen, self.grid[y][x], tile_rect)
+                    self.draw_gradient_rect(self.screen, tile.color, tile_rect)
+                    
+                    # Draw special tile marker if it's a special tile
+                    if tile.special_type:
+                        font = pygame.font.Font(None, 48)
+                        symbol = font.render('L', True, pygame.Color('white'))
+                        symbol_rect = symbol.get_rect(center=tile_rect.center)
+                        self.screen.blit(symbol, symbol_rect)
                     
                     # Draw white border
                     pygame.draw.rect(self.screen, pygame.Color('white'), tile_rect, 1)
@@ -216,7 +268,7 @@ class MatchThreeGame:
                         pygame.draw.rect(highlight_surface, (255, 255, 255, 200), highlight_surface.get_rect(), 4)
                         self.screen.blit(highlight_surface, tile_rect)
 
-                    # Restore selected tile highlight
+                    # Selected tile highlight
                     if self.selected_tile and (x, y) == self.selected_tile:
                         highlight_rect = pygame.Rect(x*TILE_SIZE, y*TILE_SIZE + 36, TILE_SIZE, TILE_SIZE)
                         highlight_surface = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
@@ -272,7 +324,7 @@ class MatchThreeGame:
             for y in range(GRID_HEIGHT):
                 for x in range(GRID_WIDTH):
                     if (x, y) != tile1 and (x, y) != tile2 and self.grid[y][x]:
-                        color = pygame.Color(self.grid[y][x])
+                        color = pygame.Color(self.grid[y][x].color)  # Access the color attribute
                         pygame.draw.rect(self.screen, color, 
                             pygame.Rect(x * TILE_SIZE, y * TILE_SIZE + 36, TILE_SIZE, TILE_SIZE))
             
@@ -283,8 +335,8 @@ class MatchThreeGame:
             swap_y2 = y2 * TILE_SIZE - (y2 - y1) * TILE_SIZE * progress + 36
             
             # Draw swapping tiles
-            color1 = pygame.Color(self.grid[y1][x1])
-            color2 = pygame.Color(self.grid[y2][x2])
+            color1 = pygame.Color(self.grid[y1][x1].color)  # Access the color attribute
+            color2 = pygame.Color(self.grid[y2][x2].color)  # Access the color attribute
             
             pygame.draw.rect(self.screen, color1, 
                 pygame.Rect(swap_x1, swap_y1, TILE_SIZE, TILE_SIZE))
@@ -325,17 +377,28 @@ class MatchThreeGame:
                     self.grid[y][x] = non_empty[y] or self.create_random_tile()
 
     def calculate_match_score(self, matches):
-        # Calculate score based on number of matches
+        # Calculate base score based on number of matches
         match_count = len(matches)
+        base_score = 0
+        
         if match_count == 3:
-            return 30 * self.chain_multiplier
+            base_score = 30 * self.chain_multiplier
         elif match_count == 4:
-            return 50 * self.chain_multiplier
+            base_score = 50 * self.chain_multiplier
         elif match_count == 5:
-            return 100 * self.chain_multiplier
+            base_score = 100 * self.chain_multiplier
         elif match_count >= 6:
-            return 200 * self.chain_multiplier
-        return 0
+            base_score = 200 * self.chain_multiplier
+        
+        # Calculate bonus points from special tile explosions
+        # Regular matches are 3-5 tiles, so any additional tiles 
+        # must be from special tile effects
+        explosion_tiles = match_count - 3  # Subtract minimum match size
+        if explosion_tiles > 0:
+            bonus_score = explosion_tiles * 10 * self.chain_multiplier
+            return base_score + bonus_score
+        
+        return base_score
 
     def animate_fall_with_delay(self):
         # Falling animation with delay
@@ -508,7 +571,7 @@ class MatchThreeGame:
                         else:
                             # Check if tiles are adjacent
                             if abs(self.selected_tile[0] - clicked_tile[0]) + \
-                               abs(self.selected_tile[1] - clicked_tile[1]) == 1:
+                            abs(self.selected_tile[1] - clicked_tile[1]) == 1:
                                 # Temporarily swap to check for matches BEFORE animation
                                 temp_grid = [row[:] for row in self.grid]
                                 temp_grid[self.selected_tile[1]][self.selected_tile[0]], \
@@ -537,9 +600,25 @@ class MatchThreeGame:
                                         round_score = self.calculate_match_score(matches)
                                         self.score += round_score
                                         
-                                        # Slow down match removal for visibility
+                                        # Create special tile if match is 4 or more
+                                        if len(matches) >= 4:
+                                            self.handle_match_creation(matches)
+                                        
+                                        # Remove matched tiles with animation
                                         for y, x in matches:
-                                            self.grid[y][x] = None
+                                            # Store the tile for potential special effects
+                                            matched_tile = self.grid[y][x]
+                                            
+                                            # Check if it's a special tile being matched
+                                            if isinstance(matched_tile, Tile) and matched_tile.special_type == 'L':
+                                                # Remove entire row
+                                                for col in range(GRID_WIDTH):
+                                                    self.grid[y][col] = None
+                                            else:
+                                                # Normal tile removal
+                                                self.grid[y][x] = None
+                                            
+                                            # Visual updates
                                             self.screen.fill(pygame.Color('black'))
                                             self.draw_score()
                                             self.draw_grid()

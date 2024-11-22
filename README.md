@@ -13,6 +13,8 @@ Swap'em! is a classic match-three puzzle game where players swap adjacent tiles 
 - Chain reaction scoring system
 - High score tracking for each difficulty level, stored locally in a JSON file
 - Smooth animations for tile swapping and matching
+- Special tiles that make the game more fun
+   - L-tile that destroys the whole row when matched
 
 ## Requirements
 

@@ -3,6 +3,7 @@ import random
 import copy
 import os
 import json
+import math
 
 # Game constants
 SCREEN_WIDTH = 512
@@ -12,7 +13,7 @@ GRID_HEIGHT = 8
 TILE_SIZE = 64
 NUM_COLORS = 8
 COLORS = ['red', 'blue', 'green', 'yellow', 'purple', 'aqua', 'hotpink', 'chocolate'][:NUM_COLORS]
-ANIMATION_SPEED = 10
+ANIMATION_SPEED = 1 # 1 for fast, 2 for regular and 3 for slow/degub
 
 class Tile:
     def __init__(self, color, special_type=None):
@@ -25,10 +26,35 @@ class Tile:
         return False
 
     def __str__(self):
-        return self.color
+        return f"{self.color} ({self.special_type or 'normal'})"
+
+class MultiplierDisplay:
+    def __init__(self):
+        self.value = 1
+        self.display_time = 0
+        self.font = pygame.font.Font(None, 48)  # Base font size
+        self.alpha = 255
+        
+    def update(self, new_value):
+        self.value = new_value
+        self.display_time = 60  # frames to display
+        self.alpha = 255
+        
+    def draw(self, surface, pos):
+        if self.display_time > 0 and self.value > 1:
+            # Dynamic font size based on multiplier
+            font_size = 36 + (self.value * 6)  # Increases font size with multiplier
+            font = pygame.font.Font(None, font_size)
+            
+            text = font.render(f'{self.value}x', True, pygame.Color('yellow'))
+            text.set_alpha(self.alpha)
+            text_rect = text.get_rect(center=pos)
+            surface.blit(text, text_rect)
+            
+            self.display_time -= 1
+            self.alpha = int(255 * (self.display_time / 60))
 
 class MatchThreeGame:
-
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -55,6 +81,25 @@ class MatchThreeGame:
         self.in_start_menu = True
         self.current_color_count = 8  # Default
         self.high_score = self.high_scores.get(str(self.current_color_count), 0)
+        self.multiplier_display = MultiplierDisplay()
+        self.score_popups = []
+        self.removal_effects = []  # List of (rect, alpha) tuples
+
+        # Load special tile images
+        self.special_tile_images = {}
+        try:
+            self.special_tile_images['L'] = pygame.image.load('assets/horizontal.png')
+            self.special_tile_images['D'] = pygame.image.load('assets/vertical.png')
+            self.special_tile_images['X'] = pygame.image.load('assets/double.png')
+            
+            # Resize images to tile size
+            for key in self.special_tile_images:
+                self.special_tile_images[key] = pygame.transform.scale(
+                    self.special_tile_images[key], (TILE_SIZE, TILE_SIZE)
+                )
+        except pygame.error:
+            print("Could not load all special tile images. Falling back to letter representation.")
+            self.special_tile_images = {}
 
     def reset_game(self):
         self.grid = self.create_grid_without_matches()
@@ -176,32 +221,90 @@ class MatchThreeGame:
             if not self.check_matches(test_grid):
                 return grid
 
-    def create_special_tile(self, color, special_type='L'):
-        return Tile(color, special_type)
-
-    def handle_special_tile_effects(self, matches):
-        tiles_to_remove = set(matches)
+    def handle_special_tile_effects(self, initial_matches):
+        """
+        Recursively handle special tile effects, creating a chain reaction of tile removals.
         
-        # Check for special tiles in matches
-        for y, x in matches:
-            if isinstance(self.grid[y][x], Tile) and self.grid[y][x].special_type == 'L':
-                # Add all tiles in the same row to be removed
-                for col in range(GRID_WIDTH):
-                    tiles_to_remove.add((y, col))
+        Args:
+            initial_matches (set): Initial set of matches to process
+        
+        Returns:
+            set: All tiles to be removed, including those from special tile chain reactions
+        """
+        tiles_to_remove = set(initial_matches)
+        processed_special_tiles = set()
+        
+        def process_special_tile(y, x):
+            # Prevent processing the same special tile multiple times
+            if (y, x) in processed_special_tiles:
+                return set()
+            
+            tile = self.grid[y][x]
+            special_removal = set()
+            
+            if tile and tile.special_type:
+                processed_special_tiles.add((y, x))
+                
+                if tile.special_type == 'L':  # Horizontal line
+                    for col in range(GRID_WIDTH):
+                        special_removal.add((y, col))
+                elif tile.special_type == 'D':  # Vertical line
+                    for row in range(GRID_HEIGHT):
+                        special_removal.add((row, x))
+                elif tile.special_type == 'X':  # Cross
+                    for col in range(GRID_WIDTH):
+                        special_removal.add((y, col))
+                    for row in range(GRID_HEIGHT):
+                        special_removal.add((row, x))
+            
+            return special_removal
+
+        # First pass: process initial special tiles in the matches
+        additional_special_removals = set()
+        for y, x in initial_matches:
+            special_removals = process_special_tile(y, x)
+            additional_special_removals.update(special_removals)
+        
+        tiles_to_remove.update(additional_special_removals)
+        
+        # Recursive pass: check if new special tile removals create more special tile effects
+        while additional_special_removals:
+            next_special_removals = set()
+            for y, x in additional_special_removals:
+                special_removals = process_special_tile(y, x)
+                next_special_removals.update(special_removals)
+            
+            tiles_to_remove.update(next_special_removals)
+            additional_special_removals = next_special_removals
         
         return tiles_to_remove
 
     def handle_match_creation(self, matches):
-        if len(matches) >= 4:
-            # Create a special tile at the top of a random column
-            random_col = random.randint(0, GRID_WIDTH-1)
+        match_count = len(matches)
+        
+        # Get the columns where matches occurred
+        match_columns = set(x for (y, x) in matches)
+        
+        # Only proceed if we have enough matches to create a special tile
+        if match_count >= 4:
             random_color = random.choice(COLORS[:self.current_color_count])
-            special_tile = Tile(random_color, special_type='L')
+            special_tile = None
+
+            if match_count == 4:
+                # L tile for 4-match
+                special_tile = Tile(random_color, special_type='L')
+            elif match_count == 5:
+                # D tile for 5-match (vertical line)
+                special_tile = Tile(random_color, special_type='D')
+            elif match_count >= 6:
+                # X tile for 6+ match (full cross)
+                special_tile = Tile(random_color, special_type='X')
             
-            # Insert the special tile at the top
-            for y in range(GRID_HEIGHT-1, 0, -1):
-                self.grid[y][random_col] = self.grid[y-1][random_col]
-            self.grid[0][random_col] = special_tile
+            if special_tile:
+                # Choose a random column from the columns where matches occurred
+                random_col = random.choice(list(match_columns))
+                # Simply replace the top tile with the special tile
+                self.grid[0][random_col] = special_tile
 
     def check_matches(self, grid=None):
         if grid is None:
@@ -241,6 +344,9 @@ class MatchThreeGame:
         surface.blit(gradient_surf, rect)
 
     def draw_grid(self):
+        if self.in_start_menu or self.grid is None:
+            return  # Don't try to draw grid during start menu
+            
         mouse_pos = pygame.mouse.get_pos()
         
         for y in range(GRID_HEIGHT):
@@ -254,10 +360,24 @@ class MatchThreeGame:
                     
                     # Draw special tile marker if it's a special tile
                     if tile.special_type:
-                        font = pygame.font.Font(None, 48)
-                        symbol = font.render('L', True, pygame.Color('white'))
-                        symbol_rect = symbol.get_rect(center=tile_rect.center)
-                        self.screen.blit(symbol, symbol_rect)
+                        # Draw glowing effect
+                        glow_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+                        glow_color = pygame.Color('yellow')
+                        glow_color.a = 100 + int(50 * math.sin(pygame.time.get_ticks() / 200))  # Pulsing effect
+                        pygame.draw.rect(glow_surf, glow_color, glow_surf.get_rect(), 4)
+                        self.screen.blit(glow_surf, tile_rect)
+                        
+                        # Try to draw PNG image, fall back to letter if not available
+                        if tile.special_type in self.special_tile_images:
+                            # Draw PNG image
+                            image = self.special_tile_images[tile.special_type]
+                            self.screen.blit(image, tile_rect)
+                        else:
+                            # Fallback to letter representation
+                            font = pygame.font.Font(None, 48)
+                            symbol = font.render(tile.special_type, True, pygame.Color('white'))
+                            symbol_rect = symbol.get_rect(center=tile_rect.center)
+                            self.screen.blit(symbol, symbol_rect)
                     
                     # Draw white border
                     pygame.draw.rect(self.screen, pygame.Color('white'), tile_rect, 1)
@@ -275,6 +395,13 @@ class MatchThreeGame:
                         pygame.draw.rect(highlight_surface, (255, 255, 255, 100), highlight_surface.get_rect(), 8)
                         self.screen.blit(highlight_surface, highlight_rect)
 
+    def draw_fade_effect(self, surface, rect, alpha):
+        # Ensure alpha is within valid range
+        alpha = max(0, min(255, int(alpha)))  # Clamp between 0 and 255
+        effect_surface = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(effect_surface, (255, 255, 255, alpha), effect_surface.get_rect())
+        surface.blit(effect_surface, rect)
+
     def get_tile_at_pos(self, pos):
         x, y = pos
         grid_x = x // TILE_SIZE
@@ -286,9 +413,16 @@ class MatchThreeGame:
         self.grid[tile2[1]][tile2[0]], self.grid[tile1[1]][tile1[0]]
 
     def check_valid_moves(self):
+        """
+        Check if there are any valid moves left on the board
+        
+        Returns:
+            bool: True if moves are available, False otherwise
+        """
+        # Similar to previous implementation
         for y in range(GRID_HEIGHT):
             for x in range(GRID_WIDTH):
-                # Horizontal swaps
+                # Check horizontal swaps
                 if x < GRID_WIDTH - 1:
                     # Simulate swap
                     self.grid[y][x], self.grid[y][x+1] = self.grid[y][x+1], self.grid[y][x]
@@ -298,7 +432,7 @@ class MatchThreeGame:
                     if matches:
                         return True
                 
-                # Vertical swaps
+                # Check vertical swaps
                 if y < GRID_HEIGHT - 1:
                     # Simulate swap
                     self.grid[y][x], self.grid[y+1][x] = self.grid[y+1][x], self.grid[y][x]
@@ -317,16 +451,19 @@ class MatchThreeGame:
         for step in range(6):
             progress = (step + 1) / 6
             
+            # Clear the screen
             self.screen.fill(pygame.Color('black'))
+            
+            # Draw score and other UI elements
             self.draw_score()
             
             # Draw other tiles
             for y in range(GRID_HEIGHT):
                 for x in range(GRID_WIDTH):
                     if (x, y) != tile1 and (x, y) != tile2 and self.grid[y][x]:
-                        color = pygame.Color(self.grid[y][x].color)  # Access the color attribute
-                        pygame.draw.rect(self.screen, color, 
-                            pygame.Rect(x * TILE_SIZE, y * TILE_SIZE + 36, TILE_SIZE, TILE_SIZE))
+                        tile_rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE + 36, TILE_SIZE, TILE_SIZE)
+                        self.draw_gradient_rect(self.screen, self.grid[y][x].color, tile_rect)
+                        pygame.draw.rect(self.screen, pygame.Color('white'), tile_rect, 1)
             
             # Interpolate swap positions
             swap_x1 = x1 * TILE_SIZE + (x2 - x1) * TILE_SIZE * progress
@@ -334,17 +471,24 @@ class MatchThreeGame:
             swap_x2 = x2 * TILE_SIZE - (x2 - x1) * TILE_SIZE * progress
             swap_y2 = y2 * TILE_SIZE - (y2 - y1) * TILE_SIZE * progress + 36
             
-            # Draw swapping tiles
-            color1 = pygame.Color(self.grid[y1][x1].color)  # Access the color attribute
-            color2 = pygame.Color(self.grid[y2][x2].color)  # Access the color attribute
+            # Draw swapping tiles with gradient and border
+            tile1_rect = pygame.Rect(swap_x1, swap_y1, TILE_SIZE, TILE_SIZE)
+            tile2_rect = pygame.Rect(swap_x2, swap_y2, TILE_SIZE, TILE_SIZE)
             
-            pygame.draw.rect(self.screen, color1, 
-                pygame.Rect(swap_x1, swap_y1, TILE_SIZE, TILE_SIZE))
-            pygame.draw.rect(self.screen, color2, 
-                pygame.Rect(swap_x2, swap_y2, TILE_SIZE, TILE_SIZE))
+            self.draw_gradient_rect(self.screen, self.grid[y1][x1].color, tile1_rect)
+            self.draw_gradient_rect(self.screen, self.grid[y2][x2].color, tile2_rect)
             
+            pygame.draw.rect(self.screen, pygame.Color('white'), tile1_rect, 1)
+            pygame.draw.rect(self.screen, pygame.Color('white'), tile2_rect, 1)
+            
+            # Update the display
             pygame.display.flip()
-            pygame.time.delay(20) # Add a small delay after swapping the tiles
+            
+            # Add a small delay to control animation speed
+            pygame.time.delay(ANIMATION_SPEED * 10)
+            
+            # Process events to keep the window responsive
+            pygame.event.pump()
 
     def animate_fall(self):
         # Falling animation logic
@@ -419,8 +563,8 @@ class MatchThreeGame:
                     self.screen.fill(pygame.Color('black'))
                     self.draw_score()
                     self.draw_grid()
-                    pygame.display.flip()
-                    pygame.time.delay(20)  # Add a small delay between falling blocks
+                    self.draw_game_state()
+                    pygame.time.delay(ANIMATION_SPEED * 15)  # Add a small delay between falling blocks
 
     def draw_score(self):
         # Draw current score
@@ -431,6 +575,7 @@ class MatchThreeGame:
         high_score_text = self.font.render(f'High Score: {self.high_score}', True, pygame.Color('yellow'))
         high_score_rect = high_score_text.get_rect(right=SCREEN_WIDTH-10, top=8)
         self.screen.blit(high_score_text, high_score_rect)
+
 
     def get_random_game_tip(self):
         tips = [
@@ -443,7 +588,17 @@ class MatchThreeGame:
         ]
         return random.choice(tips)
 
-    def draw_game_over_screen(self, tip):
+    def game_over_screen(self):
+
+        # Update high score if current score is higher
+        if self.score > int(self.high_scores[str(self.current_color_count)]):
+            self.high_scores[str(self.current_color_count)] = self.score
+            self.save_high_scores()
+       
+        # Select a random game tip if not already selected
+        if not self.game_over_tip:
+            self.game_over_tip = self.get_random_game_tip()
+
         self.screen.fill(pygame.Color('black'))
         
         # Game Over text
@@ -463,7 +618,7 @@ class MatchThreeGame:
         
         # Tip text
         tip_font = pygame.font.Font(None, 36)
-        tip_text = tip_font.render('Tip: ' + tip, True, pygame.Color('yellow'), pygame.Color('black'))
+        tip_text = tip_font.render('Tip: ' + self.game_over_tip, True, pygame.Color('yellow'), pygame.Color('black'))
         tip_rect = tip_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
         
         # Restart instructions
@@ -474,6 +629,35 @@ class MatchThreeGame:
         self.screen.blit(text, text_rect)
         self.screen.blit(tip_text, tip_rect)
         self.screen.blit(restart_text, restart_rect)
+        
+        pygame.display.flip()
+        # self.draw_game_state()
+
+    def draw_game_state(self):
+        if not self.in_start_menu:
+            self.screen.fill(pygame.Color('black'))
+            self.draw_score()
+            self.draw_grid()
+            
+            # Draw chain multiplier
+            if self.chain_multiplier > 1:
+                self.multiplier_display.draw(self.screen, (SCREEN_WIDTH - 100, 100))
+            
+            # Draw score popups
+            for popup in self.score_popups[:]:
+                popup.draw(self.screen)
+                popup.update()
+                if popup.lifetime <= 0:
+                    self.score_popups.remove(popup)
+            
+            # Draw removal effects
+            for effect in self.removal_effects[:]:
+                rect, alpha = effect
+                self.draw_fade_effect(self.screen, rect, alpha)
+                if alpha > 0:
+                    self.removal_effects[self.removal_effects.index(effect)] = (rect, alpha - 10)
+                else:
+                    self.removal_effects.remove(effect)
         
         pygame.display.flip()
 
@@ -509,33 +693,19 @@ class MatchThreeGame:
                 self.clock.tick(30)  # Control frame rate
 
             elif self.game_over:
-                # Draw game over screen with pre-selected tip
-                if not self.game_over_tip:
-                    # Select tip only once when game ends
-                    self.game_over_tip = self.get_random_game_tip()
-                
-                self.draw_game_over_screen(self.game_over_tip)
+                self.game_over_screen() 
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
 
                     if event.type == pygame.MOUSEBUTTONDOWN:
-                        # Update high score if needed before resetting
-                        if self.score > int(self.high_scores[str(self.current_color_count)]):
-                            self.high_scores[str(self.current_color_count)] = self.score
-                            self.save_high_scores()
-                        
-                        # Reset tip and go back to start menu
+                        # Reset the game state
                         self.game_over_tip = None
                         self.in_start_menu = True
                     
                     if event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_ESCAPE:
                             # Reset game state and return to start menu
-                            if self.score > int(self.high_scores[str(self.current_color_count)]):
-                                self.high_scores[str(self.current_color_count)] = self.score
-                                self.save_high_scores()
-                            
                             self.game_over_tip = None
                             self.in_start_menu = True
         
@@ -543,7 +713,11 @@ class MatchThreeGame:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
-                    
+
+                    # Check if any moves left
+                    if not self.game_over and not self.check_valid_moves():
+                        self.game_over = True  
+
                     if event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_ESCAPE:
                             # Save high score if applicable and return to menu
@@ -589,77 +763,87 @@ class MatchThreeGame:
                                     
                                     # Reset chain multiplier
                                     self.chain_multiplier = 1
+                                    chain_reaction_occurred = False
                                     
                                     # Repeat match and fall process with cascading matches
                                     while True:
                                         matches = self.check_matches()
                                         if not matches:
                                             break
-                                        
+
+                                        # Track if chain reaction occurs
+                                        if matches:
+                                            chain_reaction_occurred = True
+
                                         # Calculate and add score
                                         round_score = self.calculate_match_score(matches)
                                         self.score += round_score
-                                        
-                                        # Create special tile if match is 4 or more
+
+                                        # Determine tiles to remove with special tile chain reactions
+                                        tiles_to_remove = self.handle_special_tile_effects(matches)
+
+                                        # Optional: Add special tile creation logic
                                         if len(matches) >= 4:
                                             self.handle_match_creation(matches)
-                                        
-                                        # Remove matched tiles with animation
-                                        for y, x in matches:
-                                            # Store the tile for potential special effects
-                                            matched_tile = self.grid[y][x]
+
+                                        # Remove tiles with visual feedback
+                                        for y, x in tiles_to_remove:
+                                            rect = pygame.Rect(x*TILE_SIZE, y*TILE_SIZE + 36, TILE_SIZE, TILE_SIZE)
+                                            self.removal_effects.append((rect, 255))
+                                            self.grid[y][x] = None
                                             
-                                            # Check if it's a special tile being matched
-                                            if isinstance(matched_tile, Tile) and matched_tile.special_type == 'L':
-                                                # Remove entire row
-                                                for col in range(GRID_WIDTH):
-                                                    self.grid[y][col] = None
-                                            else:
-                                                # Normal tile removal
-                                                self.grid[y][x] = None
-                                            
-                                            # Visual updates
-                                            self.screen.fill(pygame.Color('black'))
-                                            self.draw_score()
-                                            self.draw_grid()
-                                            pygame.display.flip()
-                                            pygame.time.delay(100)
+                                        # Visual updates with delay
+                                        self.screen.fill(pygame.Color('black'))
+                                        self.draw_score()
+                                        self.draw_grid()
+                                        self.draw_game_state()
+                                        pygame.time.delay(ANIMATION_SPEED * 15)  # Add a slight delay for visual excitement
                                         
                                         # Animate falling with delay
                                         self.animate_fall_with_delay()
-                                        
                                         self.fill_grid()
                                         
-                                        # Increase chain multiplier
-                                        self.chain_multiplier += 1
+                                        # Increase chain multiplier, cap at 5x
+                                        if chain_reaction_occurred:
+                                            self.chain_multiplier = min(5, self.chain_multiplier + 1)
+                                            self.multiplier_display.update(self.chain_multiplier)
+
+                                    # After the main matching loop, check for valid moves
+                                    if not self.game_over and not self.check_valid_moves():
+                                        self.game_over = True
                                 else:
                                     # Illegal move, do nothing
                                     pass
                                 
                                 # Check if any moves left
-                                if not self.check_valid_moves():
+                                if not self.game_over and not self.check_valid_moves():
                                     self.game_over = True
                                 
                             self.selected_tile = None
 
+                        # Check for game over AFTER move processing
+                        if not self.game_over and not self.check_valid_moves():
+                            self.game_over = True
+
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            # Save high score if applicable and return to menu
+                            if self.score > int(self.high_scores[str(self.current_color_count)]):
+                                self.high_scores[str(self.current_color_count)] = self.score
+                                self.save_high_scores()
+                            self.in_start_menu = True
+                            self.game_over_tip = None
+
+                # Remove the separate game over rendering block
                 self.screen.fill(pygame.Color('black'))
                 self.draw_score()
                 self.draw_grid()
+                self.draw_game_state()
                 
-                if self.game_over:
-                    font = pygame.font.Font(None, 74)
-                    text = font.render('Game Over', True, pygame.Color('white'))
-                    text_rect = text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
-                    
-                    # Add restart instructions
-                    restart_font = pygame.font.Font(None, 36)
-                    restart_text = restart_font.render('Click to Restart', True, pygame.Color('white'))
-                    restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 50))
-                    
-                    self.screen.blit(text, text_rect)
-                    self.screen.blit(restart_text, restart_rect)
-                
-                pygame.display.flip()
+                # Check for game over at the end of the game loop
+                if not self.game_over and not self.check_valid_moves():
+                    self.game_over = True
+
                 self.clock.tick(30)
 
         # Update high score before quitting if needed

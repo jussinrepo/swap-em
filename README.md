@@ -2,7 +2,7 @@
 
 A colorful match-three puzzle game built with Python and Pygame. An experiment to see how well the lightweight Claude 3.5 Haiku model can perform in coding tasks. Rather well, it seems. IMHO as of November 2024 it surpasses OpenAI's GPT4o. :) This one took about 120 minutes of back-and-forth with the LLM, easily my easiest co-coding sessions with an AI so far.
 
-![image](https://github.com/user-attachments/assets/ade99087-e443-4f20-96d0-fab80dd6a6a1)
+![image](https://github.com/user-attachments/assets/84b78429-4e0a-4f3d-94c0-293b89de0bda)
 
 ## Description
 
@@ -14,8 +14,11 @@ Swap'em! is a classic match-three puzzle game where players swap adjacent tiles 
 - High score tracking for each difficulty level, stored locally in a JSON file
 - Smooth animations for tile swapping and matching
 - Special tiles that make the game more fun
-   - L-tile that destroys the whole row when matched
-
+   - Tile that destroys the whole row when matched
+   - Tile that wipes a whole column
+   - Tile that wreaks havoc by combining both of these
+- Rudimentary icons for these tiles
+ 
 ## Requirements
 
 - Python 3.x
@@ -60,15 +63,7 @@ python swap-em.py
 - 5 tiles: 100 points × chain multiplier
 - 6+ tiles: 200 points × chain multiplier
 
-Chain multiplier increases with consecutive matches in a single move.
-
-## Features
-
-- Individual high score tracking for each difficulty level
-- Gradient tile graphics with hover highlighting
-- Smooth animations for tile swapping and matching
-- Chain reaction bonus scoring system
-- Game tips displayed on game over screen
+Chain multiplier increases with consecutive matches in a single move, topping at 5X.
 
 ## License
 

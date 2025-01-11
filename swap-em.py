@@ -57,7 +57,7 @@ class MultiplierDisplay:
 class MatchThreeGame:
     def __init__(self):
         pygame.init()
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         pygame.display.set_caption('Swap\'em! A Match Three Game')
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 36)
@@ -291,19 +291,16 @@ class MatchThreeGame:
             special_tile = None
 
             if match_count == 4:
-                # L tile for 4-match
                 special_tile = Tile(random_color, special_type='L')
             elif match_count == 5:
-                # D tile for 5-match (vertical line)
                 special_tile = Tile(random_color, special_type='D')
             elif match_count >= 6:
-                # X tile for 6+ match (full cross)
                 special_tile = Tile(random_color, special_type='X')
             
             if special_tile:
                 # Choose a random column from the columns where matches occurred
                 random_col = random.choice(list(match_columns))
-                # Simply replace the top tile with the special tile
+                # Place the special tile at the top
                 self.grid[0][random_col] = special_tile
 
     def check_matches(self, grid=None):
@@ -584,58 +581,65 @@ class MatchThreeGame:
             "Sometimes sacrificing a move\nto set up a big combo is worth it.",
             "Pay attention to potential\nmatches before making a swap.",
             "Try to create special matches\nof 4 or 5 tiles for bonus points!",
-            "Don't rush - take your time\nto plan your moves carefully."
+            "Alternate between sides to\nkeep board fresh left and right.",
+            "Aim specials to wipe out solo\ntiles with no similar neighbors.",
+            "Special tiles can be used to\ncreate chain reactions!",
+            "Don't forget to check for\nmatches in both directions.",
+            "Don't rush - take your time\nto plan your moves carefully.", 
+            "Making matches in the\nborders is not the best strategy.", 
+            "Keep Calm and have fun!"
+            
         ]
         return random.choice(tips)
 
     def game_over_screen(self):
-
-        # Update high score if current score is higher
-        if self.score > int(self.high_scores[str(self.current_color_count)]):
-            self.high_scores[str(self.current_color_count)] = self.score
-            self.save_high_scores()
-       
         # Select a random game tip if not already selected
         if not self.game_over_tip:
             self.game_over_tip = self.get_random_game_tip()
 
+        # Clear screen with black background
         self.screen.fill(pygame.Color('black'))
+
+        # Draw score
+        score_font = pygame.font.Font(None, 48)
+        score_text = score_font.render(f'Final Score: {self.score}', True, pygame.Color('white'))
+        score_rect = score_text.get_rect(center=(SCREEN_WIDTH//2, 100))
+        self.screen.blit(score_text, score_rect)
+
+        # Check for high score
+        is_new_highscore = self.score > int(self.high_scores[str(self.current_color_count)])
+        if is_new_highscore:
+            self.high_scores[str(self.current_color_count)] = self.score
+            self.save_high_scores()
         
         # Game Over text
-        font = pygame.font.Font(None, 74)
-        text = font.render('Game Over', True, pygame.Color('white'))
-        text_rect = text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 150))
-        
-        # Check for new high score
-        is_new_highscore = self.score > int(self.high_scores[str(self.current_color_count)])
-        
-        # New High Score text
-        if is_new_highscore:
-            highscore_font = pygame.font.Font(None, 48)
-            highscore_text = highscore_font.render('NEW HIGH SCORE!', True, pygame.Color('gold'))
-            highscore_rect = highscore_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 - 100))
-            self.screen.blit(highscore_text, highscore_rect)
+        gameover_font = pygame.font.Font(None, 74)
+        gameover_text = gameover_font.render('Game Over', True, pygame.Color('white'))
+        gameover_rect = gameover_text.get_rect(center=(SCREEN_WIDTH//2, 220))
+        self.screen.blit(gameover_text, gameover_rect)
         
         # Tip text
         tip_font = pygame.font.Font(None, 36)
-        tip_text = tip_font.render('Tip: ' + self.game_over_tip, True, pygame.Color('yellow'), pygame.Color('black'))
-        tip_rect = tip_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2))
+        tip_lines = self.game_over_tip.split('\n')
+        tip_y = 300
+        for line in tip_lines:
+            tip_text = tip_font.render(line, True, pygame.Color('yellow'))
+            tip_rect = tip_text.get_rect(center=(SCREEN_WIDTH//2, tip_y))
+            self.screen.blit(tip_text, tip_rect)
+            tip_y += 30
         
         # Restart instructions
         restart_font = pygame.font.Font(None, 36)
         restart_text = restart_font.render('Click to Restart', True, pygame.Color('white'))
-        restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT//2 + 100))
-        
-        self.screen.blit(text, text_rect)
-        self.screen.blit(tip_text, tip_rect)
+        restart_rect = restart_text.get_rect(center=(SCREEN_WIDTH//2, SCREEN_HEIGHT - 100))
         self.screen.blit(restart_text, restart_rect)
-        
-        pygame.display.flip()
-        # self.draw_game_state()
 
+        pygame.display.flip()
+        
     def draw_game_state(self):
         if not self.in_start_menu:
-            self.screen.fill(pygame.Color('black'))
+            if not self.game_over:
+                self.screen.fill(pygame.Color('black'))
             self.draw_score()
             self.draw_grid()
             
@@ -782,15 +786,15 @@ class MatchThreeGame:
                                         # Determine tiles to remove with special tile chain reactions
                                         tiles_to_remove = self.handle_special_tile_effects(matches)
 
-                                        # Optional: Add special tile creation logic
-                                        if len(matches) >= 4:
-                                            self.handle_match_creation(matches)
-
                                         # Remove tiles with visual feedback
                                         for y, x in tiles_to_remove:
                                             rect = pygame.Rect(x*TILE_SIZE, y*TILE_SIZE + 36, TILE_SIZE, TILE_SIZE)
                                             self.removal_effects.append((rect, 255))
                                             self.grid[y][x] = None
+
+                                        # Create special tile in the top row if conditions are met
+                                        if len(matches) >= 4:
+                                            self.handle_match_creation(matches)
                                             
                                         # Visual updates with delay
                                         self.screen.fill(pygame.Color('black'))

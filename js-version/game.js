@@ -1,3 +1,10 @@
+/*
+Swap'em! - A match-3 puzzle game
+Created by Jussi Sivonen, with the help of Claude 3.5
+GitHub: https://github.com/jussinrepo/swap-em
+Licensed under MIT License
+*/
+
 // Constants
 const SCREEN_WIDTH = 512;
 const SCREEN_HEIGHT = 548;

@@ -517,9 +517,10 @@ class MatchThreeGame:
                 for y in range(GRID_HEIGHT):
                     self.grid[y][x] = non_empty[y] or self.create_random_tile()
 
-    def calculate_match_score(self, matches):
-        # Calculate base score based on number of matches
+    def calculate_match_score(self, matches, tiles_to_remove):
+        # Calculate base score based on number of initial matches
         match_count = len(matches)
+        extra_tiles = len(tiles_to_remove)
         base_score = 0
         
         if match_count == 3:
@@ -531,15 +532,14 @@ class MatchThreeGame:
         elif match_count >= 6:
             base_score = 200 * self.chain_multiplier
         
-        # Calculate bonus points from special tile explosions
-        # Regular matches are 3-5 tiles, so any additional tiles 
-        # must be from special tile effects
-        explosion_tiles = match_count - 3  # Subtract minimum match size
-        if explosion_tiles > 0:
-            bonus_score = explosion_tiles * 10 * self.chain_multiplier
-            return base_score + bonus_score
+        # Calculate bonus points only for additional tiles removed by special effects
+        # (total tiles - matched tiles) * 10 points per tile
+        special_effect_tiles = max(0, extra_tiles - 3)  # Tiles beyond the minimum match of 3
+        special_effect_score = special_effect_tiles * 10 * self.chain_multiplier
         
-        return base_score
+        total_score = base_score + special_effect_score
+        
+        return total_score
 
     def animate_fall_with_delay(self):
         # Falling animation with delay
@@ -779,12 +779,12 @@ class MatchThreeGame:
                                         if matches:
                                             chain_reaction_occurred = True
 
-                                        # Calculate and add score
-                                        round_score = self.calculate_match_score(matches)
-                                        self.score += round_score
-
                                         # Determine tiles to remove with special tile chain reactions
                                         tiles_to_remove = self.handle_special_tile_effects(matches)
+
+                                        # Calculate and add score
+                                        round_score = self.calculate_match_score(matches, tiles_to_remove)
+                                        self.score += round_score
 
                                         # Remove tiles with visual feedback
                                         for y, x in tiles_to_remove:
